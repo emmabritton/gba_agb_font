@@ -1,4 +1,5 @@
 pub const GLYPH_COUNT_FULL: usize = 256;
+/// 256 width bytes, 1 mode, 1 width, 1 height and 1 padding
 pub const HEADER_ALL: usize = 256 + 1 + 1 + 1 + 1;
 
 /// 4bpp font for gba covering all 256 Latin-1 code points.
@@ -19,21 +20,21 @@ macro_rules! full_font {
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::full::FullFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::full::FullFont::from_static_bytes(&FONT_BYTES.0)
     }};
     ($bytes:expr, iwram) => {{
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         #[unsafe(link_section = ".iwram")]
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::full::FullFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::full::FullFont::from_static_bytes(&FONT_BYTES.0)
     }};
     ($bytes:expr, ewram) => {{
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         #[unsafe(link_section = ".ewram")]
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::full::FullFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::full::FullFont::from_static_bytes(&FONT_BYTES.0)
     }};
 }
 

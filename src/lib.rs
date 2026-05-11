@@ -1,10 +1,97 @@
 #![no_std]
 
 use crate::full::FullFont;
-use crate::printable::PrintableFont;
+use crate::printable::{PRINTABLE_ASCII_END, PRINTABLE_ASCII_START, PrintableFont};
 
 pub mod full;
 pub mod printable;
+
+pub mod prelude {
+    pub use crate::AgbFont;
+    pub use crate::Lines;
+    pub use crate::full::FullFont;
+    pub use crate::full_font;
+    pub use crate::printable::PrintableFont;
+    pub use crate::printable_font;
+}
+
+/// Iterator over visual lines of text, returned by [`AgbFont::lines`].
+///
+/// Each item is `(line_slice, line_width_px)`. Word-wrap boundaries consume the
+/// space character; hard-wrap and explicit `\n` boundaries do not consume extra bytes.
+pub struct Lines<'a, F: AgbFont + ?Sized> {
+    font: &'a F,
+    remaining: &'a [u8],
+    wrap_px: Option<u32>,
+    word_wrap: bool,
+}
+
+impl<'a, F: AgbFont + ?Sized> Lines<'a, F> {
+    fn next_word_wrapped(&mut self, wrap_px: u32) -> (&'a [u8], u32) {
+        let text = self.remaining;
+        let mut line_w: u32 = 0;
+        let mut i = 0;
+
+        while i < text.len() {
+            let c = text[i];
+            if c == b'\n' {
+                self.remaining = &text[i + 1..];
+                return (&text[..i], line_w);
+            }
+            if c == b' ' {
+                let space_w = self.font.char_width(b' ') as u32;
+                let next_start = i + 1;
+                let next_end = text[next_start..]
+                    .iter()
+                    .position(|&x| x == b' ' || x == b'\n')
+                    .map_or(text.len(), |p| next_start + p);
+                let next_w: u32 = text[next_start..next_end]
+                    .iter()
+                    .map(|&x| self.font.char_width(x) as u32)
+                    .sum();
+                if next_end > next_start && line_w > 0 && line_w + space_w + next_w > wrap_px {
+                    self.remaining = &text[i + 1..];
+                    return (&text[..i], line_w);
+                }
+                line_w += space_w;
+            } else {
+                let char_w = self.font.char_width(c) as u32;
+                if i > 0 && line_w + char_w > wrap_px {
+                    self.remaining = &text[i..];
+                    return (&text[..i], line_w);
+                }
+                line_w += char_w;
+            }
+            i += 1;
+        }
+        self.remaining = &[];
+        (text, line_w)
+    }
+}
+
+impl<'a, F: AgbFont + ?Sized> Iterator for Lines<'a, F> {
+    type Item = (&'a [u8], u32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+        if self.word_wrap
+            && let Some(wrap) = self.wrap_px
+        {
+            return Some(self.next_word_wrapped(wrap));
+        }
+        let (width, consumed) = self.font.measure_line(self.remaining, self.wrap_px);
+        let ends_newline = consumed > 0 && self.remaining[consumed - 1] == b'\n';
+        let line = if ends_newline {
+            &self.remaining[..consumed - 1]
+        } else {
+            &self.remaining[..consumed]
+        };
+        self.remaining = &self.remaining[consumed..];
+        Some((line, width))
+    }
+}
 
 /// 4bpp bitmap font for the GBA, loaded from a binary font blob.
 pub trait AgbFont {
@@ -37,7 +124,10 @@ pub trait AgbFont {
     /// Panics in debug builds if `c` is outside the font's character range.
     /// In release builds, out-of-range values produce undefined pixel data.
     fn glyph(&self, c: u8) -> &[u32] {
-        if cfg!(debug_assertions) && self.char_offset() != 0 && !(32..=126).contains(&c) {
+        if cfg!(debug_assertions)
+            && self.char_offset() != 0
+            && !(PRINTABLE_ASCII_START..=PRINTABLE_ASCII_END).contains(&c)
+        {
             panic!("glyph {c} out of printable bounds");
         }
         let idx = c as usize - self.char_offset();
@@ -45,6 +135,61 @@ pub trait AgbFont {
         unsafe {
             self.data()
                 .get_unchecked(offset..offset + self.glyph_size())
+        }
+    }
+
+    /// Returns an iterator over visual lines of `text`.
+    ///
+    /// Each item is `(line_slice, line_width_px)`. Set `word_wrap` to `true` to
+    /// break at word (space) boundaries instead of character boundaries.
+    fn lines<'a>(&'a self, text: &'a [u8], wrap_px: Option<u32>, word_wrap: bool) -> Lines<'a, Self>
+    where
+        Self: Sized,
+    {
+        Lines {
+            font: self,
+            remaining: text,
+            wrap_px,
+            word_wrap,
+        }
+    }
+
+    /// Mutate `text` in place for word-aware wrapping, replacing spaces with `\n`
+    /// where the next word would overflow `wrap_px`.
+    ///
+    /// Words longer than `wrap_px` are **not** split here — because the slice length
+    /// is fixed, inserting a mid-word `\n` would require shifting bytes.
+    /// The caller's renderer must handle character-level hard breaks for overlong words.
+    /// (`int_draw_text` does this; use [`lines`](AgbFont::lines) instead if you need
+    /// a self-contained iterator that handles both cases.)
+    fn word_wrap_in_place(&self, text: &mut [u8], wrap_px: u32) {
+        let mut line_w: u32 = 0;
+        let mut i = 0;
+        while i < text.len() {
+            let c = text[i];
+            if c == b'\n' {
+                line_w = 0;
+            } else if c == b' ' {
+                let space_w = self.char_width(b' ') as u32;
+                let next_start = i + 1;
+                let next_end = text[next_start..]
+                    .iter()
+                    .position(|&x| x == b' ' || x == b'\n')
+                    .map_or(text.len(), |p| next_start + p);
+                let next_w: u32 = text[next_start..next_end]
+                    .iter()
+                    .map(|&x| self.char_width(x) as u32)
+                    .sum();
+                if next_end > next_start && line_w > 0 && line_w + space_w + next_w > wrap_px {
+                    text[i] = b'\n';
+                    line_w = 0;
+                } else {
+                    line_w += space_w;
+                }
+            } else {
+                line_w += self.char_width(c) as u32;
+            }
+            i += 1;
         }
     }
 
@@ -71,52 +216,16 @@ pub trait AgbFont {
         (width, text.len())
     }
 
-    /// Preprocess `text` for word-aware wrapping by replacing spaces with `\n` where the next
-    /// word would overflow `wrap_px`. Words longer than `wrap_px` are left for the renderers
-    /// character level hard break to handle.
-    fn word_wrap(&self, text: &mut [u8], wrap_px: u32) {
-        let mut line_w: u32 = 0;
-        let mut i = 0;
-        while i < text.len() {
-            let c = text[i];
-            if c == b'\n' {
-                line_w = 0;
-            } else if c == b' ' {
-                let space_w = self.char_width(b' ') as u32;
-                let next_start = i + 1;
-                let next_end = text[next_start..]
-                    .iter()
-                    .position(|&x| x == b' ' || x == b'\n')
-                    .map(|p| next_start + p)
-                    .unwrap_or(text.len());
-                let next_w: u32 = text[next_start..next_end]
-                    .iter()
-                    .map(|&x| self.char_width(x) as u32)
-                    .sum();
-                if next_end > next_start && line_w > 0 && line_w + space_w + next_w > wrap_px {
-                    text[i] = b'\n';
-                    line_w = 0;
-                } else {
-                    line_w += space_w;
-                }
-            } else {
-                line_w += self.char_width(c) as u32;
-            }
-            i += 1;
-        }
-    }
-
     /// Returns the `(width, height)` in pixels required to render `text`, with optional line-wrapping.
-    fn size_of(&self, text: &[u8], wrap_at: Option<u8>) -> (u8, u8) {
+    fn size_of(&self, text: &[u8], wrap_at: Option<u32>) -> (u8, u8) {
         if text.is_empty() {
             return (0, 0);
         }
-        let max_width = wrap_at.map(|v| v as u32);
         let mut max_w: u32 = 0;
         let mut total_h: u32 = 0;
         let mut remaining = text;
         loop {
-            let (line_w, consumed) = self.measure_line(remaining, max_width);
+            let (line_w, consumed) = self.measure_line(remaining, wrap_at);
             if line_w > max_w {
                 max_w = line_w;
             }

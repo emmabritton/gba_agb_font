@@ -1,6 +1,6 @@
 [package]
 name = "gba_agb_font_eb"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Emma Britton <emmabritton@pm.me>"]
 description = "Bitmap font for GBA/AGB"

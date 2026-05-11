@@ -1,3 +1,4 @@
+/// 95 width bytes, 1 mode, 1 width, 1 height and 2 padding
 pub const HEADER_PRINTABLE: usize = 95 + 1 + 1 + 1 + 2;
 /// Printable ASCII: 0x20 (space) through 0x7E (tilde), 95 characters.
 pub const GLYPH_COUNT_PRINTABLE: usize = 95;
@@ -70,20 +71,20 @@ macro_rules! printable_font {
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
     }};
     ($bytes:expr, iwram) => {{
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         #[unsafe(link_section = ".iwram")]
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
     }};
     ($bytes:expr, ewram) => {{
         #[repr(C, align(4))]
         struct AlignedFont([u8; { $bytes.len() }]);
         #[unsafe(link_section = ".ewram")]
         static FONT_BYTES: AlignedFont = AlignedFont(*$bytes);
-        $crate::font::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
+        $crate::printable::PrintableFont::from_static_bytes(&FONT_BYTES.0)
     }};
 }
