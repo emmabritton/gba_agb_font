@@ -1,6 +1,6 @@
 pub const GLYPH_COUNT_FULL: usize = 256;
-/// 256 width bytes, 1 mode, 1 width, 1 height and 1 padding
-pub const HEADER_ALL: usize = 256 + 1 + 1 + 1 + 1;
+/// Binary layout: 1 mode + 1 glyph_width + 1 glyph_height + 256 char_widths + 1 padding = 260 bytes
+pub const HEADER_FULL: usize = 256 + 1 + 1 + 1 + 1;
 
 /// 4bpp font for gba covering all 256 Latin-1 code points.
 /// Font data location (ROM/IWRAM/EWRAM) is determined by the `full_font!` macro.
@@ -40,8 +40,13 @@ macro_rules! full_font {
 
 impl FullFont {
     /// Parse a mode-1 binary font blob. Panics if the data is too short or has the wrong mode byte.
+    ///
+    /// # Safety
+    ///
+    /// `bytes` must be 4-byte aligned. The `full_font!` macro guarantees this via
+    /// `#[repr(C, align(4))]`; direct callers must uphold it.
     pub const fn from_static_bytes(bytes: &'static [u8]) -> Self {
-        assert!(bytes.len() >= HEADER_ALL, "font bytes too short");
+        assert!(bytes.len() >= HEADER_FULL, "font bytes too short");
         let mode = bytes[0];
         assert!(mode == 1, "invalid font mode (must be 1 for full font)");
 
@@ -60,13 +65,13 @@ impl FullFont {
             i += 1;
         }
 
-        let data_len = bytes.len() - HEADER_ALL;
+        let data_len = bytes.len() - HEADER_FULL;
         assert!(
             data_len.is_multiple_of(4),
             "font pixel data length is not a multiple of 4"
         );
         let data: &'static [u32] = unsafe {
-            core::slice::from_raw_parts(bytes.as_ptr().add(HEADER_ALL) as *const u32, data_len / 4)
+            core::slice::from_raw_parts(bytes.as_ptr().add(HEADER_FULL) as *const u32, data_len / 4)
         };
 
         let glyph_size = row_u32s * glyph_height as usize;

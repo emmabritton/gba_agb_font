@@ -1,4 +1,4 @@
-/// 95 width bytes, 1 mode, 1 width, 1 height and 2 padding
+/// Binary layout: 1 mode + 1 glyph_width + 1 glyph_height + 95 char_widths + 2 padding = 100 bytes
 pub const HEADER_PRINTABLE: usize = 95 + 1 + 1 + 1 + 2;
 /// Printable ASCII: 0x20 (space) through 0x7E (tilde), 95 characters.
 pub const GLYPH_COUNT_PRINTABLE: usize = 95;
@@ -18,6 +18,11 @@ pub struct PrintableFont {
 
 impl PrintableFont {
     /// Parse a mode-0 binary font blob. Panics if the data is too short or has the wrong mode byte.
+    ///
+    /// # Safety
+    ///
+    /// `bytes` must be 4-byte aligned. The `printable_font!` macro guarantees this via
+    /// `#[repr(C, align(4))]`; direct callers must uphold it.
     pub const fn from_static_bytes(bytes: &'static [u8]) -> Self {
         assert!(bytes.len() >= HEADER_PRINTABLE, "font bytes too short");
         let mode = bytes[0];

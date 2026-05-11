@@ -1,7 +1,7 @@
 #![no_std]
 
 use crate::full::FullFont;
-use crate::printable::{PRINTABLE_ASCII_END, PRINTABLE_ASCII_START, PrintableFont};
+use crate::printable::PrintableFont;
 
 pub mod full;
 pub mod printable;
@@ -39,17 +39,8 @@ impl<'a, F: AgbFont + ?Sized> Lines<'a, F> {
                 return (&text[..i], line_w);
             }
             if c == b' ' {
-                let space_w = self.font.char_width(b' ') as u32;
-                let next_start = i + 1;
-                let next_end = text[next_start..]
-                    .iter()
-                    .position(|&x| x == b' ' || x == b'\n')
-                    .map_or(text.len(), |p| next_start + p);
-                let next_w: u32 = text[next_start..next_end]
-                    .iter()
-                    .map(|&x| self.font.char_width(x) as u32)
-                    .sum();
-                if next_end > next_start && line_w > 0 && line_w + space_w + next_w > wrap_px {
+                let (space_w, next_w, next_end) = self.font.word_lookahead(text, i);
+                if next_end > i + 1 && line_w > 0 && line_w + space_w + next_w > wrap_px {
                     self.remaining = &text[i + 1..];
                     return (&text[..i], line_w);
                 }
@@ -101,6 +92,7 @@ pub trait AgbFont {
     /// Advance width in pixels for character `c`.
     #[inline]
     fn char_width(&self, c: u8) -> u8 {
+        debug_assert!(c as usize >= self.char_offset(), "Attempted to get char outside of font bounds");
         self.char_widths()[c as usize - self.char_offset()]
     }
 
@@ -124,12 +116,11 @@ pub trait AgbFont {
     /// Panics in debug builds if `c` is outside the font's character range.
     /// In release builds, out-of-range values produce undefined pixel data.
     fn glyph(&self, c: u8) -> &[u32] {
-        if cfg!(debug_assertions)
-            && self.char_offset() != 0
-            && !(PRINTABLE_ASCII_START..=PRINTABLE_ASCII_END).contains(&c)
-        {
-            panic!("glyph {c} out of printable bounds");
-        }
+        let idx = c as usize;
+        debug_assert!(
+            idx >= self.char_offset() && idx < self.char_offset() + self.char_widths().len(),
+            "glyph {c} out of font bounds"
+        );
         let idx = c as usize - self.char_offset();
         let offset = idx * self.glyph_size();
         unsafe {
@@ -142,6 +133,10 @@ pub trait AgbFont {
     ///
     /// Each item is `(line_slice, line_width_px)`. Set `word_wrap` to `true` to
     /// break at word (space) boundaries instead of character boundaries.
+    ///
+    /// When `word_wrap` is `true` but `wrap_px` is `None`, word wrapping is silently
+    /// skipped and the iterator falls back to character-level breaking (same as
+    /// `word_wrap: false`).
     fn lines<'a>(&'a self, text: &'a [u8], wrap_px: Option<u32>, word_wrap: bool) -> Lines<'a, Self>
     where
         Self: Sized,
@@ -170,17 +165,8 @@ pub trait AgbFont {
             if c == b'\n' {
                 line_w = 0;
             } else if c == b' ' {
-                let space_w = self.char_width(b' ') as u32;
-                let next_start = i + 1;
-                let next_end = text[next_start..]
-                    .iter()
-                    .position(|&x| x == b' ' || x == b'\n')
-                    .map_or(text.len(), |p| next_start + p);
-                let next_w: u32 = text[next_start..next_end]
-                    .iter()
-                    .map(|&x| self.char_width(x) as u32)
-                    .sum();
-                if next_end > next_start && line_w > 0 && line_w + space_w + next_w > wrap_px {
+                let (space_w, next_w, next_end) = self.word_lookahead(text, i);
+                if next_end > i + 1 && line_w > 0 && line_w + space_w + next_w > wrap_px {
                     text[i] = b'\n';
                     line_w = 0;
                 } else {
@@ -191,6 +177,21 @@ pub trait AgbFont {
             }
             i += 1;
         }
+    }
+
+    #[inline]
+    fn word_lookahead(&self, text: &[u8], space_at: usize) -> (u32, u32, usize) {
+        let space_w = self.char_width(b' ') as u32;
+        let next_start = space_at + 1;
+        let next_end = text[next_start..]
+            .iter()
+            .position(|&x| x == b' ' || x == b'\n')
+            .map_or(text.len(), |p| next_start + p);
+        let next_w: u32 = text[next_start..next_end]
+            .iter()
+            .map(|&x| self.char_width(x) as u32)
+            .sum();
+        (space_w, next_w, next_end)
     }
 
     /// Measures one line of text, returning `(line_width_px, bytes_consumed)`.
@@ -217,7 +218,7 @@ pub trait AgbFont {
     }
 
     /// Returns the `(width, height)` in pixels required to render `text`, with optional line-wrapping.
-    fn size_of(&self, text: &[u8], wrap_at: Option<u32>) -> (u8, u8) {
+    fn size_of(&self, text: &[u8], wrap_at: Option<u32>) -> (u32, u32) {
         if text.is_empty() {
             return (0, 0);
         }
@@ -235,7 +236,7 @@ pub trait AgbFont {
                 break;
             }
         }
-        (max_w as u8, total_h as u8)
+        (max_w, total_h)
     }
 }
 
@@ -277,3 +278,108 @@ macro_rules! impl_agb_font {
 
 impl_agb_font!(PrintableFont, 32);
 impl_agb_font!(FullFont, 0);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockFont([u8; 95]);
+
+    impl AgbFont for MockFont {
+        fn char_widths(&self) -> &[u8] {
+            &self.0
+        }
+        fn char_offset(&self) -> usize {
+            32
+        }
+        fn data(&self) -> &[u32] {
+            &[]
+        }
+        fn glyph_height(&self) -> u32 {
+            8
+        }
+        fn glyph_size(&self) -> usize {
+            0
+        }
+        fn row_u32s(&self) -> usize {
+            1
+        }
+    }
+
+    fn font(w: u8) -> MockFont {
+        MockFont([w; 95])
+    }
+
+    #[test]
+    fn measure_line_empty() {
+        assert_eq!(font(6).measure_line(b"", None), (0, 0));
+    }
+
+    #[test]
+    fn measure_line_no_wrap() {
+        // "abc" with width-6 chars = 18px, 3 bytes consumed
+        assert_eq!(font(6).measure_line(b"abc", None), (18, 3));
+        // "abc" with width-8 chars = 24px, 3 bytes consumed
+        assert_eq!(font(8).measure_line(b"abc", None), (24, 3));
+    }
+
+    #[test]
+    fn measure_line_newline() {
+        // "ab\ncd" — stops at \n, consumed includes the \n byte
+        assert_eq!(font(6).measure_line(b"ab\ncd", None), (12, 3));
+    }
+
+    #[test]
+    fn measure_line_hard_wrap() {
+        // wrap at 15px with width-6: "ab" = 12px fits, "c" would be 18 — wraps before c
+        assert_eq!(font(6).measure_line(b"abc", Some(15)), (12, 2));
+    }
+
+    #[test]
+    fn measure_line_first_char_always_fits() {
+        // Even if wrap_px is tiny, the first char is always included
+        assert_eq!(font(6).measure_line(b"abc", Some(1)), (6, 1));
+    }
+
+    #[test]
+    fn word_wrap_in_place_basic() {
+        // "hello world" with width-6, wrap at 36px:
+        // "hello" = 30px fits, space + "world" = 6 + 30 = 36 — just over, so wrap
+        let mut text = *b"hello world";
+        font(6).word_wrap_in_place(&mut text, 36);
+        assert_eq!(&text, b"hello\nworld");
+    }
+
+    #[test]
+    fn word_wrap_in_place_no_wrap_needed() {
+        let mut text = *b"hi there";
+        let original = text;
+        font(6).word_wrap_in_place(&mut text, 200);
+        assert_eq!(text, original);
+    }
+
+    #[test]
+    fn word_wrap_in_place_trailing_space() {
+        // Trailing space has no following word, should not be converted
+        let mut text = *b"hello ";
+        font(6).word_wrap_in_place(&mut text, 10);
+        assert_eq!(&text, b"hello ");
+    }
+
+    #[test]
+    fn size_of_single_line() {
+        // "abc" = 18px wide, 8px tall (one line)
+        assert_eq!(font(6).size_of(b"abc", None), (18, 8));
+    }
+
+    #[test]
+    fn size_of_multiline() {
+        // "ab\ncd" = two lines of 12px, height = 16
+        assert_eq!(font(6).size_of(b"ab\ncd", None), (12, 16));
+    }
+
+    #[test]
+    fn size_of_empty() {
+        assert_eq!(font(6).size_of(b"", None), (0, 0));
+    }
+}
