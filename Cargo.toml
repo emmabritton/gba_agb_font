@@ -1,0 +1,13 @@
+[package]
+name = "gba_agb_font_eb"
+version = "0.5.0"
+edition = "2024"
+authors = ["Emma Britton <emmabritton@pm.me>"]
+description = "Bitmap font for GBA/AGB"
+license-file = "LICENSE"
+repository = "https://github.com/emmabritton/gba_agb_font"
+readme = "README.md"
+homepage = "https://github.com/emmabritton/gba_agb_font"
+keywords = ["games", "pixels", "retro", "gba", "agb"]
+categories = ["games"]
+publish = true
