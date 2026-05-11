@@ -92,7 +92,10 @@ pub trait AgbFont {
     /// Advance width in pixels for character `c`.
     #[inline]
     fn char_width(&self, c: u8) -> u8 {
-        debug_assert!(c as usize >= self.char_offset(), "Attempted to get char outside of font bounds");
+        debug_assert!(
+            c as usize >= self.char_offset(),
+            "Attempted to get char outside of font bounds"
+        );
         self.char_widths()[c as usize - self.char_offset()]
     }
 
